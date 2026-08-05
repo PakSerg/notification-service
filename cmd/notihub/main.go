@@ -9,13 +9,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PakSerg/NotiHub/internal/service"
 	"github.com/PakSerg/NotiHub/internal/transport"
 )
 
 func main() {
+	notificationService := service.NewNotificationService()
+	handler := transport.NewHandler(notificationService)
+
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: transport.NewRouter(),
+		Handler: handler.Router(),
 	}
 
 	go func() {
