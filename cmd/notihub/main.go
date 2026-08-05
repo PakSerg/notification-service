@@ -8,15 +8,14 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/PakSerg/NotiHub/internal/transport"
 )
 
 func main() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", healthHandler)
-
 	server := &http.Server{
 		Addr:    ":8080",
-		Handler: mux,
+		Handler: transport.NewRouter(),
 	}
 
 	go func() {
@@ -40,9 +39,4 @@ func main() {
 	}
 
 	log.Println("server stopped")
-}
-
-func healthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
 }
