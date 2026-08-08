@@ -9,12 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PakSerg/NotiHub/internal/repository"
 	"github.com/PakSerg/NotiHub/internal/service"
 	"github.com/PakSerg/NotiHub/internal/transport"
 )
 
 func main() {
-	notificationService := service.NewNotificationService()
+	notificationRepo := repository.NewMemoryRepository()
+	notificationService := service.NewNotificationService(notificationRepo)
 	handler := transport.NewHandler(notificationService)
 
 	server := &http.Server{

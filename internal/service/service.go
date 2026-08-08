@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"time"
 
 	"github.com/PakSerg/NotiHub/internal/notification"
+	"github.com/PakSerg/NotiHub/internal/repository"
 )
 
 var (
@@ -15,13 +17,15 @@ var (
 	ErrEmptyMessage   = errors.New("message is required")
 )
 
-type NotificationService struct{}
-
-func NewNotificationService() *NotificationService {
-	return &NotificationService{}
+type NotificationService struct {
+	repo repository.Repository
 }
 
-func (s *NotificationService) Create(channel notification.Channel, recipient, message string) (*notification.Notification, error) {
+func NewNotificationService(repo repository.Repository) *NotificationService {
+	return &NotificationService{repo: repo}
+}
+
+func (s *NotificationService) Create(ctx context.Context, channel notification.Channel, recipient, message string) (*notification.Notification, error) {
 	if !channel.Valid() {
 		return nil, ErrInvalidChannel
 	}
@@ -41,7 +45,15 @@ func (s *NotificationService) Create(channel notification.Channel, recipient, me
 		CreatedAt: time.Now(),
 	}
 
+	if err := s.repo.Save(ctx, n); err != nil {
+		return nil, err
+	}
+
 	return n, nil
+}
+
+func (s *NotificationService) Get(ctx context.Context, id string) (*notification.Notification, error) {
+	return s.repo.Get(ctx, id)
 }
 
 func generateID() string {

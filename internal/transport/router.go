@@ -2,9 +2,11 @@ package transport
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/PakSerg/NotiHub/internal/notification"
+	"github.com/PakSerg/NotiHub/internal/repository"
 	"github.com/PakSerg/NotiHub/internal/service"
 )
 
@@ -20,6 +22,7 @@ func (h *Handler) Router() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("POST /notifications", h.createNotification)
+	mux.HandleFunc("GET /notifications/{id}", h.getNotification)
 	return mux
 }
 
@@ -41,7 +44,7 @@ func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	n, err := h.service.Create(notification.Channel(req.Channel), req.Recipient, req.Message)
+	n, err := h.service.Create(r.Context(), notification.Channel(req.Channel), req.Recipient, req.Message)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -49,5 +52,22 @@ func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(n)
+}
+
+func (h *Handler) getNotification(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	n, err := h.service.Get(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, repository.ErrNotFound) {
+			http.Error(w, "notification not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(n)
 }
