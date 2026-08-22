@@ -14,3 +14,9 @@ type Repository interface {
 	Get(ctx context.Context, id string) (*notification.Notification, error)
 	UpdateStatus(ctx context.Context, id string, status notification.Status) error
 }
+
+// Compile-time checks that every implementation satisfies the interface.
+var (
+	_ Repository = (*MemoryRepository)(nil)
+	_ Repository = (*SQLiteRepository)(nil)
+)
