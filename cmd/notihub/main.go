@@ -9,14 +9,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PakSerg/NotiHub/internal/config"
 	"github.com/PakSerg/NotiHub/internal/repository"
 	"github.com/PakSerg/NotiHub/internal/service"
 	"github.com/PakSerg/NotiHub/internal/transport"
 )
 
-// defaultDBPath points at the project root, so running `go run ./cmd/notihub`
-// creates notihub.db next to go.mod. Override it with NOTIHUB_DB_PATH.
-const defaultDBPath = "notihub.db"
+// version is stamped at build time with -ldflags "-X main.version=...".
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -28,12 +28,12 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	dbPath := defaultDBPath
-	if path := os.Getenv("NOTIHUB_DB_PATH"); path != "" {
-		dbPath = path
+	cfg, err := config.Load()
+	if err != nil {
+		return err
 	}
 
-	notificationRepo, err := repository.NewSQLiteRepository(ctx, dbPath)
+	notificationRepo, err := repository.NewSQLiteRepository(ctx, cfg.DBPath)
 	if err != nil {
 		return err
 	}
@@ -43,13 +43,13 @@ func run() error {
 		}
 	}()
 
-	log.Println("using database", dbPath)
+	log.Printf("notihub %s, database %s", version, cfg.DBPath)
 
 	notificationService := service.NewNotificationService(notificationRepo)
 	handler := transport.NewHandler(notificationService)
 
 	server := &http.Server{
-		Addr:              ":8080",
+		Addr:              cfg.HTTPAddr,
 		Handler:           handler.Router(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -70,7 +70,7 @@ func run() error {
 
 	log.Println("shutting down...")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {

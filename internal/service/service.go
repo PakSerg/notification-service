@@ -42,7 +42,7 @@ func (s *NotificationService) Create(ctx context.Context, channel notification.C
 		Recipient: recipient,
 		Message:   message,
 		Status:    notification.StatusPending,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().UTC(),
 	}
 
 	if err := s.repo.Save(ctx, n); err != nil {
