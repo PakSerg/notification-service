@@ -12,18 +12,25 @@ import (
 
 type Handler struct {
 	service *service.NotificationService
+	limiter RateLimiter
 }
 
-func NewHandler(s *service.NotificationService) *Handler {
-	return &Handler{service: s}
+// NewHandler builds a Handler. limiter may be nil, in which case requests
+// are not rate limited.
+func NewHandler(s *service.NotificationService, limiter RateLimiter) *Handler {
+	return &Handler{service: s, limiter: limiter}
 }
 
-func (h *Handler) Router() *http.ServeMux {
+func (h *Handler) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("POST /notifications", h.createNotification)
 	mux.HandleFunc("GET /notifications/{id}", h.getNotification)
-	return mux
+
+	if h.limiter == nil {
+		return mux
+	}
+	return rateLimitMiddleware(h.limiter, mux)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {

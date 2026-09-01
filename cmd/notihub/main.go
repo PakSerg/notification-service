@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/PakSerg/NotiHub/internal/config"
+	"github.com/PakSerg/NotiHub/internal/ratelimit"
 	"github.com/PakSerg/NotiHub/internal/repository"
 	"github.com/PakSerg/NotiHub/internal/service"
 	"github.com/PakSerg/NotiHub/internal/transport"
@@ -45,8 +46,14 @@ func run() error {
 
 	log.Printf("notihub %s, database %s", version, cfg.DBPath)
 
+	var limiter transport.RateLimiter
+	if cfg.RateLimitRPS > 0 {
+		limiter = ratelimit.New(cfg.RateLimitRPS, cfg.RateLimitBurst)
+		log.Printf("rate limiting enabled: %.1f req/s, burst %d", cfg.RateLimitRPS, cfg.RateLimitBurst)
+	}
+
 	notificationService := service.NewNotificationService(notificationRepo)
-	handler := transport.NewHandler(notificationService)
+	handler := transport.NewHandler(notificationService, limiter)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,

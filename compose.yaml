@@ -11,6 +11,9 @@ services:
     environment:
       NOTIHUB_DB_PATH: /data/notihub.db
       NOTIHUB_SHUTDOWN_TIMEOUT: 10s
+      # Per-client-IP request throttling. Set NOTIHUB_RATE_LIMIT_RPS to 0 to disable.
+      NOTIHUB_RATE_LIMIT_RPS: ${NOTIHUB_RATE_LIMIT_RPS:-5}
+      NOTIHUB_RATE_LIMIT_BURST: ${NOTIHUB_RATE_LIMIT_BURST:-10}
     volumes:
       - notihub-data:/data
     # Give in-flight requests a chance to finish before SIGKILL arrives.
