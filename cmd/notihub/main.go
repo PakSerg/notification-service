@@ -53,7 +53,12 @@ func run() error {
 		log.Printf("rate limiting enabled: %.1f req/s, burst %d", cfg.RateLimitRPS, cfg.RateLimitBurst)
 	}
 
-	notificationService := service.NewNotificationService(notificationRepo, provider.NewRegistry())
+	retryPolicy := service.RetryPolicy{
+		MaxAttempts: cfg.RetryMaxAttempts,
+		BaseDelay:   cfg.RetryBaseDelay,
+		MaxDelay:    cfg.RetryMaxDelay,
+	}
+	notificationService := service.NewNotificationService(notificationRepo, provider.NewRegistry(), service.WithRetryPolicy(retryPolicy))
 	handler := transport.NewHandler(notificationService, limiter)
 
 	server := &http.Server{

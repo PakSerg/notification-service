@@ -34,4 +34,9 @@ type Notification struct {
 	Message   string    `json:"message"`
 	Status    Status    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+	// Attempts is how many delivery attempts have been made so far.
+	Attempts int `json:"attempts"`
+	// LastError is the error message of the most recent failed attempt.
+	// Empty once the notification is sent, or before any attempt has failed.
+	LastError string `json:"last_error,omitempty"`
 }

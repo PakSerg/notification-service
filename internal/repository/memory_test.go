@@ -41,7 +41,7 @@ func TestMemoryRepositoryGetNotFound(t *testing.T) {
 	}
 }
 
-func TestMemoryRepositoryUpdateStatus(t *testing.T) {
+func TestMemoryRepositoryUpdateDeliveryResult(t *testing.T) {
 	r := NewMemoryRepository()
 	ctx := context.Background()
 
@@ -50,7 +50,7 @@ func TestMemoryRepositoryUpdateStatus(t *testing.T) {
 		t.Fatalf("unexpected error on save: %v", err)
 	}
 
-	if err := r.UpdateStatus(ctx, "abc123", notification.Status("sent")); err != nil {
+	if err := r.UpdateDeliveryResult(ctx, "abc123", notification.Status("sent"), 2, ""); err != nil {
 		t.Fatalf("unexpected error on update: %v", err)
 	}
 
@@ -60,6 +60,9 @@ func TestMemoryRepositoryUpdateStatus(t *testing.T) {
 	}
 	if got.Status != notification.Status("sent") {
 		t.Fatalf("expected status %q, got %q", "sent", got.Status)
+	}
+	if got.Attempts != 2 {
+		t.Fatalf("expected attempts %d, got %d", 2, got.Attempts)
 	}
 }
 

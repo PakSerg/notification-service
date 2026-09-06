@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,7 +13,8 @@ import (
 )
 
 // stubSender records the notifications it was asked to send and returns err
-// for every call.
+// for every call. sent must be large enough to buffer every attempt a test
+// expects, since nothing drains it until the test asserts on it.
 type stubSender struct {
 	err  error
 	sent chan *notification.Notification
@@ -21,6 +23,28 @@ type stubSender struct {
 func (s *stubSender) Send(ctx context.Context, n *notification.Notification) error {
 	s.sent <- n
 	return s.err
+}
+
+// fastRetryPolicy keeps retry-driven tests quick and deterministic.
+func fastRetryPolicy(maxAttempts int) Option {
+	return WithRetryPolicy(RetryPolicy{MaxAttempts: maxAttempts, BaseDelay: time.Millisecond, MaxDelay: 5 * time.Millisecond})
+}
+
+// flakySender fails the first `failures` calls, then succeeds.
+type flakySender struct {
+	mu       sync.Mutex
+	failures int
+}
+
+func (s *flakySender) Send(ctx context.Context, n *notification.Notification) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.failures > 0 {
+		s.failures--
+		return errors.New("transient failure")
+	}
+	return nil
 }
 
 // stubRegistry always returns sender, regardless of channel.
@@ -55,7 +79,7 @@ func waitForStatus(t *testing.T, repo repository.Repository, id string, want not
 func TestCreateDispatchesAndMarksSent(t *testing.T) {
 	sender := &stubSender{sent: make(chan *notification.Notification, 1)}
 	repo := repository.NewMemoryRepository()
-	svc := NewNotificationService(repo, &stubRegistry{sender: sender})
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
 
 	n, err := svc.Create(context.Background(), notification.ChannelEmail, "user@example.com", "hi")
 	if err != nil {
@@ -72,12 +96,21 @@ func TestCreateDispatchesAndMarksSent(t *testing.T) {
 	}
 
 	waitForStatus(t, repo, n.ID, notification.StatusSent)
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got.Attempts)
+	}
 }
 
-func TestCreateDispatchFailureMarksFailed(t *testing.T) {
-	sender := &stubSender{err: errors.New("boom"), sent: make(chan *notification.Notification, 1)}
+func TestCreateDispatchFailureRetriesThenMarksFailed(t *testing.T) {
+	const maxAttempts = 3
+	sender := &stubSender{err: errors.New("boom"), sent: make(chan *notification.Notification, maxAttempts)}
 	repo := repository.NewMemoryRepository()
-	svc := NewNotificationService(repo, &stubRegistry{sender: sender})
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(maxAttempts))
 
 	n, err := svc.Create(context.Background(), notification.ChannelWebhook, "https://example.com/hook", "hi")
 	if err != nil {
@@ -85,6 +118,42 @@ func TestCreateDispatchFailureMarksFailed(t *testing.T) {
 	}
 
 	waitForStatus(t, repo, n.ID, notification.StatusFailed)
+
+	if len(sender.sent) != maxAttempts {
+		t.Fatalf("expected %d delivery attempts, got %d", maxAttempts, len(sender.sent))
+	}
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Attempts != maxAttempts {
+		t.Fatalf("expected %d attempts recorded, got %d", maxAttempts, got.Attempts)
+	}
+	if got.LastError != "boom" {
+		t.Fatalf("expected last_error %q, got %q", "boom", got.LastError)
+	}
+}
+
+func TestCreateDispatchSucceedsAfterTransientFailure(t *testing.T) {
+	sender := &flakySender{failures: 1}
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
+
+	n, err := svc.Create(context.Background(), notification.ChannelPush, "device-token", "hi")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	waitForStatus(t, repo, n.ID, notification.StatusSent)
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got.Attempts)
+	}
 }
 
 func TestCreateWithoutSendersStaysPending(t *testing.T) {

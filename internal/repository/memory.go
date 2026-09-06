@@ -37,7 +37,7 @@ func (r *MemoryRepository) Get(ctx context.Context, id string) (*notification.No
 	return n, nil
 }
 
-func (r *MemoryRepository) UpdateStatus(ctx context.Context, id string, status notification.Status) error {
+func (r *MemoryRepository) UpdateDeliveryResult(ctx context.Context, id string, status notification.Status, attempts int, lastErr string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -46,5 +46,7 @@ func (r *MemoryRepository) UpdateStatus(ctx context.Context, id string, status n
 		return ErrNotFound
 	}
 	n.Status = status
+	n.Attempts = attempts
+	n.LastError = lastErr
 	return nil
 }

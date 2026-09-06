@@ -26,15 +26,26 @@ type Config struct {
 	// RateLimitBurst is the number of requests a client may burst above
 	// RateLimitRPS before being throttled.
 	RateLimitBurst int
+	// RetryMaxAttempts is the total number of delivery attempts made for a
+	// notification, including the first one, before it is marked failed.
+	RetryMaxAttempts int
+	// RetryBaseDelay is the backoff before the second delivery attempt; it
+	// doubles after every subsequent failure, up to RetryMaxDelay.
+	RetryBaseDelay time.Duration
+	// RetryMaxDelay caps the backoff between delivery attempts.
+	RetryMaxDelay time.Duration
 }
 
 // Default values are chosen to make `go run ./cmd/notihub` work with no setup.
 const (
-	defaultHTTPAddr        = ":8080"
-	defaultDBPath          = "notihub.db"
-	defaultShutdownTimeout = 5 * time.Second
-	defaultRateLimitRPS    = 5.0
-	defaultRateLimitBurst  = 10
+	defaultHTTPAddr         = ":8080"
+	defaultDBPath           = "notihub.db"
+	defaultShutdownTimeout  = 5 * time.Second
+	defaultRateLimitRPS     = 5.0
+	defaultRateLimitBurst   = 10
+	defaultRetryMaxAttempts = 3
+	defaultRetryBaseDelay   = 500 * time.Millisecond
+	defaultRetryMaxDelay    = 10 * time.Second
 )
 
 // Load reads the configuration from the environment, falling back to defaults.
@@ -54,12 +65,30 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
+	retryMaxAttempts, err := intEnv("NOTIHUB_RETRY_MAX_ATTEMPTS", defaultRetryMaxAttempts)
+	if err != nil {
+		return Config{}, err
+	}
+
+	retryBaseDelay, err := durationEnv("NOTIHUB_RETRY_BASE_DELAY", defaultRetryBaseDelay)
+	if err != nil {
+		return Config{}, err
+	}
+
+	retryMaxDelay, err := durationEnv("NOTIHUB_RETRY_MAX_DELAY", defaultRetryMaxDelay)
+	if err != nil {
+		return Config{}, err
+	}
+
 	return Config{
-		HTTPAddr:        stringEnv("NOTIHUB_HTTP_ADDR", defaultHTTPAddr),
-		DBPath:          stringEnv("NOTIHUB_DB_PATH", defaultDBPath),
-		ShutdownTimeout: shutdownTimeout,
-		RateLimitRPS:    rateLimitRPS,
-		RateLimitBurst:  rateLimitBurst,
+		HTTPAddr:         stringEnv("NOTIHUB_HTTP_ADDR", defaultHTTPAddr),
+		DBPath:           stringEnv("NOTIHUB_DB_PATH", defaultDBPath),
+		ShutdownTimeout:  shutdownTimeout,
+		RateLimitRPS:     rateLimitRPS,
+		RateLimitBurst:   rateLimitBurst,
+		RetryMaxAttempts: retryMaxAttempts,
+		RetryBaseDelay:   retryBaseDelay,
+		RetryMaxDelay:    retryMaxDelay,
 	}, nil
 }
 

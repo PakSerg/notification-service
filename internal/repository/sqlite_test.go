@@ -89,7 +89,7 @@ func TestSQLiteRepositoryGetNotFound(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepositoryUpdateStatus(t *testing.T) {
+func TestSQLiteRepositoryUpdateDeliveryResult(t *testing.T) {
 	r := newTestRepository(t)
 	ctx := context.Background()
 
@@ -98,7 +98,7 @@ func TestSQLiteRepositoryUpdateStatus(t *testing.T) {
 		t.Fatalf("unexpected error on save: %v", err)
 	}
 
-	if err := r.UpdateStatus(ctx, n.ID, notification.Status("sent")); err != nil {
+	if err := r.UpdateDeliveryResult(ctx, n.ID, notification.Status("failed"), 3, "boom"); err != nil {
 		t.Fatalf("unexpected error on update: %v", err)
 	}
 
@@ -106,15 +106,21 @@ func TestSQLiteRepositoryUpdateStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error on get: %v", err)
 	}
-	if got.Status != notification.Status("sent") {
-		t.Fatalf("expected status %q, got %q", "sent", got.Status)
+	if got.Status != notification.Status("failed") {
+		t.Fatalf("expected status %q, got %q", "failed", got.Status)
+	}
+	if got.Attempts != 3 {
+		t.Fatalf("expected attempts %d, got %d", 3, got.Attempts)
+	}
+	if got.LastError != "boom" {
+		t.Fatalf("expected last_error %q, got %q", "boom", got.LastError)
 	}
 }
 
-func TestSQLiteRepositoryUpdateStatusNotFound(t *testing.T) {
+func TestSQLiteRepositoryUpdateDeliveryResultNotFound(t *testing.T) {
 	r := newTestRepository(t)
 
-	err := r.UpdateStatus(context.Background(), "does-not-exist", notification.Status("sent"))
+	err := r.UpdateDeliveryResult(context.Background(), "does-not-exist", notification.Status("sent"), 1, "")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}

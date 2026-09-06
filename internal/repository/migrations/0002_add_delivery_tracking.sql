@@ -1,0 +1,2 @@
+ALTER TABLE notifications ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE notifications ADD COLUMN last_error TEXT NOT NULL DEFAULT '';

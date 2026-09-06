@@ -67,14 +67,16 @@ func (r *SQLiteRepository) Close() error {
 // Save stores the notification, overwriting an existing one with the same ID.
 func (r *SQLiteRepository) Save(ctx context.Context, n *notification.Notification) error {
 	const query = `
-		INSERT INTO notifications (id, channel, recipient, message, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO notifications (id, channel, recipient, message, status, created_at, attempts, last_error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 		    channel    = excluded.channel,
 		    recipient  = excluded.recipient,
 		    message    = excluded.message,
 		    status     = excluded.status,
-		    created_at = excluded.created_at`
+		    created_at = excluded.created_at,
+		    attempts   = excluded.attempts,
+		    last_error = excluded.last_error`
 
 	_, err := r.db.ExecContext(ctx, query,
 		n.ID,
@@ -83,6 +85,8 @@ func (r *SQLiteRepository) Save(ctx context.Context, n *notification.Notificatio
 		n.Message,
 		string(n.Status),
 		formatTime(n.CreatedAt),
+		n.Attempts,
+		n.LastError,
 	)
 	if err != nil {
 		return fmt.Errorf("save notification %s: %w", n.ID, err)
@@ -93,7 +97,7 @@ func (r *SQLiteRepository) Save(ctx context.Context, n *notification.Notificatio
 
 func (r *SQLiteRepository) Get(ctx context.Context, id string) (*notification.Notification, error) {
 	const query = `
-		SELECT id, channel, recipient, message, status, created_at
+		SELECT id, channel, recipient, message, status, created_at, attempts, last_error
 		FROM notifications
 		WHERE id = ?`
 
@@ -105,7 +109,7 @@ func (r *SQLiteRepository) Get(ctx context.Context, id string) (*notification.No
 	)
 
 	err := r.db.QueryRowContext(ctx, query, id).
-		Scan(&n.ID, &channel, &n.Recipient, &n.Message, &status, &createdAt)
+		Scan(&n.ID, &channel, &n.Recipient, &n.Message, &status, &createdAt, &n.Attempts, &n.LastError)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, ErrNotFound
@@ -122,10 +126,10 @@ func (r *SQLiteRepository) Get(ctx context.Context, id string) (*notification.No
 	return &n, nil
 }
 
-func (r *SQLiteRepository) UpdateStatus(ctx context.Context, id string, status notification.Status) error {
-	const query = `UPDATE notifications SET status = ? WHERE id = ?`
+func (r *SQLiteRepository) UpdateDeliveryResult(ctx context.Context, id string, status notification.Status, attempts int, lastErr string) error {
+	const query = `UPDATE notifications SET status = ?, attempts = ?, last_error = ? WHERE id = ?`
 
-	res, err := r.db.ExecContext(ctx, query, string(status), id)
+	res, err := r.db.ExecContext(ctx, query, string(status), attempts, lastErr, id)
 	if err != nil {
 		return fmt.Errorf("update status of notification %s: %w", id, err)
 	}
