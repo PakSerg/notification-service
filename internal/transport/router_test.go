@@ -14,7 +14,7 @@ type denyingLimiter struct{}
 func (denyingLimiter) Allow(key string) bool { return false }
 
 func newTestHandler(limiter RateLimiter) *Handler {
-	svc := service.NewNotificationService(repository.NewMemoryRepository())
+	svc := service.NewNotificationService(repository.NewMemoryRepository(), nil)
 	return NewHandler(svc, limiter)
 }
 
