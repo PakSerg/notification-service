@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/PakSerg/NotiHub/internal/closeutil"
 	"github.com/PakSerg/NotiHub/internal/config"
 	"github.com/PakSerg/NotiHub/internal/queue"
 	"github.com/PakSerg/NotiHub/internal/ratelimit"
@@ -39,11 +40,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := notificationRepo.Close(); err != nil {
-			log.Printf("close database: %v", err)
-		}
-	}()
+	defer closeutil.LogClose("database", notificationRepo.Close)
 
 	log.Printf("notihub %s starting", version)
 
@@ -54,11 +51,7 @@ func run() error {
 	}
 
 	producer := queue.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
-	defer func() {
-		if err := producer.Close(); err != nil {
-			log.Printf("close kafka producer: %v", err)
-		}
-	}()
+	defer closeutil.LogClose("kafka producer", producer.Close)
 
 	// The API only ever creates notifications and hands their delivery off to
 	// the queue, so it has no need for a SenderRegistry - that belongs to the

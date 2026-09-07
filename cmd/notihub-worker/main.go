@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/PakSerg/NotiHub/internal/closeutil"
 	"github.com/PakSerg/NotiHub/internal/config"
 	"github.com/PakSerg/NotiHub/internal/provider"
 	"github.com/PakSerg/NotiHub/internal/queue"
@@ -41,11 +42,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		if err := notificationRepo.Close(); err != nil {
-			log.Printf("close database: %v", err)
-		}
-	}()
+	defer closeutil.LogClose("database", notificationRepo.Close)
 
 	retryPolicy := service.RetryPolicy{
 		MaxAttempts: cfg.RetryMaxAttempts,
@@ -55,11 +52,7 @@ func run() error {
 	notificationService := service.NewNotificationService(notificationRepo, provider.NewRegistry(), service.WithRetryPolicy(retryPolicy))
 
 	consumer := queue.NewConsumer(cfg.KafkaBrokers, cfg.KafkaTopic, cfg.KafkaConsumerGroup)
-	defer func() {
-		if err := consumer.Close(); err != nil {
-			log.Printf("close kafka consumer: %v", err)
-		}
-	}()
+	defer closeutil.LogClose("kafka consumer", consumer.Close)
 
 	log.Printf("notihub-worker %s starting, topic %s, group %s", version, cfg.KafkaTopic, cfg.KafkaConsumerGroup)
 
