@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -94,8 +95,10 @@ func apply(ctx context.Context, db *sql.DB, m migration) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
-		return err
+	for _, stmt := range splitStatements(m.sql) {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
 	}
 
 	const insert = `INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)`
@@ -104,4 +107,21 @@ func apply(ctx context.Context, db *sql.DB, m migration) error {
 	}
 
 	return tx.Commit()
+}
+
+// splitStatements breaks a migration file into individual SQL statements.
+// Postgres' extended query protocol (used by pgx/database/sql) runs exactly
+// one statement per Exec call, unlike SQLite which happily took a whole file
+// at once - so a migration with more than one statement, like 0001_init.sql,
+// must be sent one at a time. Migrations here are plain DDL with no
+// semicolons inside string literals or function bodies, so a naive split on
+// ";" is enough; it would not be for anything fancier (e.g. PL/pgSQL).
+func splitStatements(sql string) []string {
+	var stmts []string
+	for _, s := range strings.Split(sql, ";") {
+		if s = strings.TrimSpace(s); s != "" {
+			stmts = append(stmts, s)
+		}
+	}
+	return stmts
 }
