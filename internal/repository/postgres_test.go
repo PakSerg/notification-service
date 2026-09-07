@@ -3,21 +3,37 @@ package repository
 import (
 	"context"
 	"errors"
-	"path/filepath"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/PakSerg/NotiHub/internal/notification"
 )
 
-func newTestRepository(t *testing.T) *SQLiteRepository {
+// testDatabaseURL returns the DSN of a real PostgreSQL instance to run
+// against, skipping the test when none is configured (e.g. running `go test`
+// locally without a database). CI provides one via a service container.
+func testDatabaseURL(t *testing.T) string {
 	t.Helper()
 
-	r, err := NewSQLiteRepository(context.Background(), filepath.Join(t.TempDir(), "test.db"))
+	url := os.Getenv("NOTIHUB_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("NOTIHUB_TEST_DATABASE_URL not set, skipping PostgreSQL integration test")
+	}
+	return url
+}
+
+func newTestRepository(t *testing.T) *PostgresRepository {
+	t.Helper()
+
+	r, err := NewPostgresRepository(context.Background(), testDatabaseURL(t))
 	if err != nil {
 		t.Fatalf("unexpected error on open: %v", err)
 	}
 	t.Cleanup(func() {
+		if _, err := r.db.Exec("TRUNCATE notifications"); err != nil {
+			t.Errorf("unexpected error on truncate: %v", err)
+		}
 		if err := r.Close(); err != nil {
 			t.Errorf("unexpected error on close: %v", err)
 		}
@@ -26,7 +42,7 @@ func newTestRepository(t *testing.T) *SQLiteRepository {
 	return r
 }
 
-func TestSQLiteRepositorySaveAndGet(t *testing.T) {
+func TestPostgresRepositorySaveAndGet(t *testing.T) {
 	r := newTestRepository(t)
 	ctx := context.Background()
 
@@ -36,7 +52,7 @@ func TestSQLiteRepositorySaveAndGet(t *testing.T) {
 		Recipient: "user@example.com",
 		Message:   "hello",
 		Status:    notification.StatusPending,
-		CreatedAt: time.Now(),
+		CreatedAt: time.Now().Round(time.Microsecond),
 	}
 
 	if err := r.Save(ctx, n); err != nil {
@@ -57,7 +73,7 @@ func TestSQLiteRepositorySaveAndGet(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepositorySaveOverwrites(t *testing.T) {
+func TestPostgresRepositorySaveOverwrites(t *testing.T) {
 	r := newTestRepository(t)
 	ctx := context.Background()
 
@@ -80,7 +96,7 @@ func TestSQLiteRepositorySaveOverwrites(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepositoryGetNotFound(t *testing.T) {
+func TestPostgresRepositoryGetNotFound(t *testing.T) {
 	r := newTestRepository(t)
 
 	_, err := r.Get(context.Background(), "does-not-exist")
@@ -89,7 +105,7 @@ func TestSQLiteRepositoryGetNotFound(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepositoryUpdateDeliveryResult(t *testing.T) {
+func TestPostgresRepositoryUpdateDeliveryResult(t *testing.T) {
 	r := newTestRepository(t)
 	ctx := context.Background()
 
@@ -117,7 +133,7 @@ func TestSQLiteRepositoryUpdateDeliveryResult(t *testing.T) {
 	}
 }
 
-func TestSQLiteRepositoryUpdateDeliveryResultNotFound(t *testing.T) {
+func TestPostgresRepositoryUpdateDeliveryResultNotFound(t *testing.T) {
 	r := newTestRepository(t)
 
 	err := r.UpdateDeliveryResult(context.Background(), "does-not-exist", notification.Status("sent"), 1, "")
@@ -126,12 +142,13 @@ func TestSQLiteRepositoryUpdateDeliveryResultNotFound(t *testing.T) {
 	}
 }
 
-// Data must survive a restart: that is the whole point of using a file.
-func TestSQLiteRepositoryPersistsBetweenRestarts(t *testing.T) {
+// Data must survive an app restart: open a second, independent connection
+// pool against the same database and confirm it sees what the first wrote.
+func TestPostgresRepositoryVisibleAcrossConnections(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "test.db")
+	dsn := testDatabaseURL(t)
 
-	first, err := NewSQLiteRepository(ctx, path)
+	first, err := NewPostgresRepository(ctx, dsn)
 	if err != nil {
 		t.Fatalf("unexpected error on open: %v", err)
 	}
@@ -142,13 +159,18 @@ func TestSQLiteRepositoryPersistsBetweenRestarts(t *testing.T) {
 		t.Fatalf("unexpected error on close: %v", err)
 	}
 
-	second, err := NewSQLiteRepository(ctx, path)
+	second, err := NewPostgresRepository(ctx, dsn)
 	if err != nil {
 		t.Fatalf("unexpected error on reopen: %v", err)
 	}
-	defer second.Close()
+	t.Cleanup(func() {
+		if _, err := second.db.Exec("TRUNCATE notifications"); err != nil {
+			t.Errorf("unexpected error on truncate: %v", err)
+		}
+		second.Close()
+	})
 
 	if _, err := second.Get(ctx, "abc123"); err != nil {
-		t.Fatalf("unexpected error on get after restart: %v", err)
+		t.Fatalf("unexpected error on get from second connection: %v", err)
 	}
 }

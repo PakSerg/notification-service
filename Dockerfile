@@ -15,7 +15,7 @@ COPY . .
 
 ARG VERSION=dev
 
-# The SQLite driver is pure Go, so a fully static binary needs no CGO.
+# The pgx driver is pure Go, so a fully static binary needs no CGO.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build \
@@ -25,23 +25,20 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:3.21
 
-# ca-certificates for outgoing HTTPS (webhooks), tzdata so timestamps in logs
-# are not stuck in UTC when TZ is set, wget for the healthcheck below.
+# ca-certificates for outgoing HTTPS (webhooks + TLS to Postgres), tzdata so
+# timestamps in logs are not stuck in UTC when TZ is set, wget for the
+# healthcheck below.
 RUN apk add --no-cache ca-certificates tzdata \
-    && adduser --disabled-password --no-create-home --uid 10001 notihub \
-    && mkdir -p /data \
-    && chown notihub:notihub /data
+    && adduser --disabled-password --no-create-home --uid 10001 notihub
 
 COPY --from=build /out/notihub /usr/local/bin/notihub
 
 USER notihub
 
-# /data is the volume mount point, so the database survives container replacement.
-WORKDIR /data
-VOLUME ["/data"]
-
+# Points at the `db` service from compose.yaml by default; override
+# NOTIHUB_DATABASE_URL to run against a different PostgreSQL instance.
 ENV NOTIHUB_HTTP_ADDR=:8080 \
-    NOTIHUB_DB_PATH=/data/notihub.db
+    NOTIHUB_DATABASE_URL="postgres://notihub:notihub@db:5432/notihub?sslmode=disable"
 
 EXPOSE 8080
 

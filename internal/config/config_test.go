@@ -14,8 +14,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.HTTPAddr != defaultHTTPAddr {
 		t.Fatalf("expected addr %q, got %q", defaultHTTPAddr, cfg.HTTPAddr)
 	}
-	if cfg.DBPath != defaultDBPath {
-		t.Fatalf("expected db path %q, got %q", defaultDBPath, cfg.DBPath)
+	if cfg.DatabaseURL != defaultDatabaseURL {
+		t.Fatalf("expected database url %q, got %q", defaultDatabaseURL, cfg.DatabaseURL)
 	}
 	if cfg.ShutdownTimeout != defaultShutdownTimeout {
 		t.Fatalf("expected shutdown timeout %v, got %v", defaultShutdownTimeout, cfg.ShutdownTimeout)
@@ -30,7 +30,7 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOTIHUB_HTTP_ADDR", ":9090")
-	t.Setenv("NOTIHUB_DB_PATH", "/data/notihub.db")
+	t.Setenv("NOTIHUB_DATABASE_URL", "postgres://user:pass@db:5432/notihub?sslmode=disable")
 	t.Setenv("NOTIHUB_SHUTDOWN_TIMEOUT", "30s")
 	t.Setenv("NOTIHUB_RATE_LIMIT_RPS", "20")
 	t.Setenv("NOTIHUB_RATE_LIMIT_BURST", "40")
@@ -43,8 +43,8 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.HTTPAddr != ":9090" {
 		t.Fatalf("expected addr %q, got %q", ":9090", cfg.HTTPAddr)
 	}
-	if cfg.DBPath != "/data/notihub.db" {
-		t.Fatalf("expected db path %q, got %q", "/data/notihub.db", cfg.DBPath)
+	if cfg.DatabaseURL != "postgres://user:pass@db:5432/notihub?sslmode=disable" {
+		t.Fatalf("expected database url %q, got %q", "postgres://user:pass@db:5432/notihub?sslmode=disable", cfg.DatabaseURL)
 	}
 	if cfg.ShutdownTimeout != 30*time.Second {
 		t.Fatalf("expected shutdown timeout %v, got %v", 30*time.Second, cfg.ShutdownTimeout)

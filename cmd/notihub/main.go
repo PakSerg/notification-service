@@ -35,7 +35,7 @@ func run() error {
 		return err
 	}
 
-	notificationRepo, err := repository.NewSQLiteRepository(ctx, cfg.DBPath)
+	notificationRepo, err := repository.NewPostgresRepository(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
@@ -45,7 +45,7 @@ func run() error {
 		}
 	}()
 
-	log.Printf("notihub %s, database %s", version, cfg.DBPath)
+	log.Printf("notihub %s starting", version)
 
 	var limiter transport.RateLimiter
 	if cfg.RateLimitRPS > 0 {

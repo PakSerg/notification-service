@@ -7,10 +7,7 @@ compose.yaml
 Makefile
 README.md
 
-# Local database and build artifacts must never leak into the image.
-*.db
-*.db-wal
-*.db-shm
+# Build artifacts must never leak into the image.
 *.exe
 *.test
 *.out

@@ -31,10 +31,5 @@ go.work.sum
 # .idea/
 # .vscode/
 
-# Local SQLite database
-*.db
-*.db-wal
-*.db-shm
-
 # Build output
 bin/

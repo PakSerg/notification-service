@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     recipient  TEXT NOT NULL,
     message    TEXT NOT NULL,
     status     TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TIMESTAMPTZ NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications (status);

@@ -13,10 +13,8 @@ import (
 type Config struct {
 	// HTTPAddr is the address the HTTP server listens on.
 	HTTPAddr string
-	// DBPath is the SQLite database file. Relative paths are resolved
-	// against the working directory, which is the project root locally
-	// and /data in the container.
-	DBPath string
+	// DatabaseURL is the PostgreSQL connection string (DSN).
+	DatabaseURL string
 	// ShutdownTimeout bounds how long in-flight requests may finish
 	// after a termination signal.
 	ShutdownTimeout time.Duration
@@ -39,7 +37,7 @@ type Config struct {
 // Default values are chosen to make `go run ./cmd/notihub` work with no setup.
 const (
 	defaultHTTPAddr         = ":8080"
-	defaultDBPath           = "notihub.db"
+	defaultDatabaseURL      = "postgres://notihub:notihub@localhost:5432/notihub?sslmode=disable"
 	defaultShutdownTimeout  = 5 * time.Second
 	defaultRateLimitRPS     = 5.0
 	defaultRateLimitBurst   = 10
@@ -82,7 +80,7 @@ func Load() (Config, error) {
 
 	return Config{
 		HTTPAddr:         stringEnv("NOTIHUB_HTTP_ADDR", defaultHTTPAddr),
-		DBPath:           stringEnv("NOTIHUB_DB_PATH", defaultDBPath),
+		DatabaseURL:      stringEnv("NOTIHUB_DATABASE_URL", defaultDatabaseURL),
 		ShutdownTimeout:  shutdownTimeout,
 		RateLimitRPS:     rateLimitRPS,
 		RateLimitBurst:   rateLimitBurst,

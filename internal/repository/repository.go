@@ -21,5 +21,5 @@ type Repository interface {
 // Compile-time checks that every implementation satisfies the interface.
 var (
 	_ Repository = (*MemoryRepository)(nil)
-	_ Repository = (*SQLiteRepository)(nil)
+	_ Repository = (*PostgresRepository)(nil)
 )

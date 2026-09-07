@@ -26,7 +26,7 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	const createTable = `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 		    name       TEXT PRIMARY KEY,
-		    applied_at TEXT NOT NULL
+		    applied_at TIMESTAMPTZ NOT NULL
 		)`
 
 	if _, err := db.ExecContext(ctx, createTable); err != nil {
@@ -78,7 +78,7 @@ func loadMigrations() ([]migration, error) {
 }
 
 func isApplied(ctx context.Context, db *sql.DB, name string) (bool, error) {
-	const query = `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ?)`
+	const query = `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = $1)`
 
 	var exists bool
 	if err := db.QueryRowContext(ctx, query, name).Scan(&exists); err != nil {
@@ -98,8 +98,8 @@ func apply(ctx context.Context, db *sql.DB, m migration) error {
 		return err
 	}
 
-	const insert = `INSERT INTO schema_migrations (name, applied_at) VALUES (?, ?)`
-	if _, err := tx.ExecContext(ctx, insert, m.name, formatTime(time.Now())); err != nil {
+	const insert = `INSERT INTO schema_migrations (name, applied_at) VALUES ($1, $2)`
+	if _, err := tx.ExecContext(ctx, insert, m.name, time.Now().UTC()); err != nil {
 		return fmt.Errorf("record migration: %w", err)
 	}
 
