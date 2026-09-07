@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log"
 	mrand "math/rand/v2"
 	"time"
@@ -28,6 +29,13 @@ const attemptTimeout = 10 * time.Second
 // *provider.Registry.
 type SenderRegistry interface {
 	Get(channel notification.Channel) (provider.Sender, error)
+}
+
+// Publisher hands a delivery job for an already-saved notification off to a
+// queue, so it can be picked up and processed by a worker. Satisfied by
+// *queue.Producer.
+type Publisher interface {
+	Publish(ctx context.Context, id string) error
 }
 
 // RetryPolicy controls how a failed delivery is retried with exponential
@@ -67,14 +75,23 @@ func WithRetryPolicy(p RetryPolicy) Option {
 	return func(s *NotificationService) { s.retry = p }
 }
 
-type NotificationService struct {
-	repo    repository.Repository
-	senders SenderRegistry
-	retry   RetryPolicy
+// WithPublisher makes Create hand off delivery of new notifications to a
+// queue instead of leaving them pending. The API process wires this in; the
+// worker process (which calls Dispatch directly, as jobs arrive) does not.
+func WithPublisher(p Publisher) Option {
+	return func(s *NotificationService) { s.publisher = p }
 }
 
-// NewNotificationService builds a service. senders may be nil, in which case
-// created notifications are stored but never actually delivered.
+type NotificationService struct {
+	repo      repository.Repository
+	senders   SenderRegistry
+	publisher Publisher
+	retry     RetryPolicy
+}
+
+// NewNotificationService builds a service. senders is only used by Dispatch,
+// so the API process (which only calls Create) may pass nil. Likewise the
+// worker process, which only calls Dispatch, has no use for WithPublisher.
 func NewNotificationService(repo repository.Repository, senders SenderRegistry, opts ...Option) *NotificationService {
 	s := &NotificationService{repo: repo, senders: senders, retry: DefaultRetryPolicy()}
 	for _, opt := range opts {
@@ -107,8 +124,18 @@ func (s *NotificationService) Create(ctx context.Context, channel notification.C
 		return nil, err
 	}
 
-	if s.senders != nil {
-		go s.dispatch(n)
+	if s.publisher != nil {
+		// n is already durably saved as pending, so a publish failure here
+		// does not lose it - but nothing will ever pick it up for delivery
+		// either. Surfacing the error lets the caller retry the request;
+		// closing that gap for good would need a transactional outbox, which
+		// is more machinery than this service warrants today.
+		if err := s.publisher.Publish(ctx, n.ID); err != nil {
+			// n itself was saved successfully, so it is returned alongside
+			// the error rather than dropped - the caller may still want its
+			// ID, e.g. to log which notification is now stuck pending.
+			return n, fmt.Errorf("publish delivery job for notification %s: %w", n.ID, err)
+		}
 	}
 
 	return n, nil
@@ -118,15 +145,34 @@ func (s *NotificationService) Get(ctx context.Context, id string) (*notification
 	return s.repo.Get(ctx, id)
 }
 
-// dispatch delivers n through its channel's sender, retrying on failure with
-// exponential backoff up to s.retry.MaxAttempts, and records the outcome. It
-// runs in the background after Create has already returned the pending
-// notification to the caller.
-func (s *NotificationService) dispatch(n *notification.Notification) {
+// Dispatch delivers the notification identified by id through its channel's
+// sender, retrying on failure with exponential backoff up to
+// s.retry.MaxAttempts, and records the outcome. It is meant to be called by a
+// queue consumer once per delivery job.
+//
+// Dispatch is idempotent: a notification that is no longer pending (already
+// sent, or already given up on by an earlier run of this same job) is left
+// untouched. That makes it safe to call again for a job redelivered after an
+// at-least-once queue's consumer crashed before acknowledging it.
+//
+// A non-nil error means the job could not be processed at all - for example
+// the notification's own record could not be read - and should be retried;
+// a resolved delivery outcome, success or failure, is never reported as an
+// error here.
+func (s *NotificationService) Dispatch(ctx context.Context, id string) error {
+	n, err := s.repo.Get(ctx, id)
+	if err != nil {
+		return fmt.Errorf("load notification %s: %w", id, err)
+	}
+
+	if n.Status != notification.StatusPending {
+		return nil
+	}
+
 	sender, err := s.senders.Get(n.Channel)
 	if err != nil {
 		s.finish(n, notification.StatusFailed, 0, err)
-		return
+		return nil
 	}
 
 	maxAttempts := s.retry.MaxAttempts
@@ -136,10 +182,10 @@ func (s *NotificationService) dispatch(n *notification.Notification) {
 
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		lastErr = s.attempt(sender, n)
+		lastErr = s.attempt(ctx, sender, n)
 		if lastErr == nil {
 			s.finish(n, notification.StatusSent, attempt, nil)
-			return
+			return nil
 		}
 
 		log.Printf("send notification %s via %s (attempt %d/%d): %v", n.ID, n.Channel, attempt, maxAttempts, lastErr)
@@ -149,15 +195,19 @@ func (s *NotificationService) dispatch(n *notification.Notification) {
 	}
 
 	s.finish(n, notification.StatusFailed, maxAttempts, lastErr)
+	return nil
 }
 
-func (s *NotificationService) attempt(sender provider.Sender, n *notification.Notification) error {
-	ctx, cancel := context.WithTimeout(context.Background(), attemptTimeout)
+func (s *NotificationService) attempt(ctx context.Context, sender provider.Sender, n *notification.Notification) error {
+	ctx, cancel := context.WithTimeout(ctx, attemptTimeout)
 	defer cancel()
 
 	return sender.Send(ctx, n)
 }
 
+// finish always runs to completion on its own timeout, detached from ctx, so
+// a delivery outcome is recorded even if the caller (e.g. a worker shutting
+// down) has already canceled its own context.
 func (s *NotificationService) finish(n *notification.Notification, status notification.Status, attempts int, sendErr error) {
 	lastErr := ""
 	if sendErr != nil {

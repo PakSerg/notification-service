@@ -10,6 +10,7 @@ services:
       - "${NOTIHUB_PORT:-8080}:8080"
     environment:
       NOTIHUB_DATABASE_URL: postgres://notihub:${POSTGRES_PASSWORD:-notihub}@db:5432/notihub?sslmode=disable
+      NOTIHUB_KAFKA_BROKERS: kafka:19092
       NOTIHUB_SHUTDOWN_TIMEOUT: 10s
       # Per-client-IP request throttling. Set NOTIHUB_RATE_LIMIT_RPS to 0 to disable.
       NOTIHUB_RATE_LIMIT_RPS: ${NOTIHUB_RATE_LIMIT_RPS:-5}
@@ -17,8 +18,34 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     # Give in-flight requests a chance to finish before SIGKILL arrives.
     stop_grace_period: 15s
+
+  notihub-worker:
+    build:
+      context: .
+      args:
+        VERSION: ${VERSION:-dev}
+    image: notihub:${VERSION:-dev}
+    entrypoint: ["notihub-worker"]
+    restart: unless-stopped
+    # Scale delivery throughput independently of the API, e.g.
+    # `docker compose up --scale notihub-worker=3`; instances share the
+    # topic's partitions via NOTIHUB_KAFKA_CONSUMER_GROUP.
+    environment:
+      NOTIHUB_DATABASE_URL: postgres://notihub:${POSTGRES_PASSWORD:-notihub}@db:5432/notihub?sslmode=disable
+      NOTIHUB_KAFKA_BROKERS: kafka:19092
+    depends_on:
+      db:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    # No HTTP server to probe here, unlike the image's default healthcheck.
+    healthcheck:
+      disable: true
+    stop_grace_period: 30s
 
   db:
     image: postgres:17-alpine
@@ -37,5 +64,34 @@ services:
       timeout: 3s
       retries: 10
 
+  kafka:
+    # Official Apache Kafka image, single node in KRaft mode (no ZooKeeper).
+    image: apache/kafka:3.9.0
+    restart: unless-stopped
+    ports:
+      - "${NOTIHUB_KAFKA_PORT:-9092}:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT is for other containers on the compose network (advertised
+      # as the `kafka` service name); PLAINTEXT_HOST is for tools running on
+      # the host machine, e.g. `go run ./cmd/notihub` outside of compose.
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:19093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:${NOTIHUB_KAFKA_PORT:-9092}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:19093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - notihub-kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
 volumes:
   notihub-db-data:
+  notihub-kafka-data:

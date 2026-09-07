@@ -56,107 +56,68 @@ func (r *stubRegistry) Get(notification.Channel) (provider.Sender, error) {
 	return r.sender, nil
 }
 
-func waitForStatus(t *testing.T, repo repository.Repository, id string, want notification.Status) {
-	t.Helper()
-
-	deadline := time.After(time.Second)
-	for {
-		n, err := repo.Get(context.Background(), id)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if n.Status == want {
-			return
-		}
-		select {
-		case <-deadline:
-			t.Fatalf("timed out waiting for status %q, last was %q", want, n.Status)
-		case <-time.After(time.Millisecond):
-		}
-	}
+// stubPublisher records every ID it was asked to publish.
+type stubPublisher struct {
+	mu  sync.Mutex
+	err error
+	ids []string
 }
 
-func TestCreateDispatchesAndMarksSent(t *testing.T) {
-	sender := &stubSender{sent: make(chan *notification.Notification, 1)}
+func (p *stubPublisher) Publish(ctx context.Context, id string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.ids = append(p.ids, id)
+	return p.err
+}
+
+func (p *stubPublisher) published() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return append([]string(nil), p.ids...)
+}
+
+func TestCreatePublishesDeliveryJob(t *testing.T) {
 	repo := repository.NewMemoryRepository()
-	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
+	publisher := &stubPublisher{}
+	svc := NewNotificationService(repo, nil, WithPublisher(publisher))
 
 	n, err := svc.Create(context.Background(), notification.ChannelEmail, "user@example.com", "hi")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	select {
-	case got := <-sender.sent:
-		if got.ID != n.ID {
-			t.Fatalf("expected sender to receive notification %s, got %s", n.ID, got.ID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("timed out waiting for dispatch")
+	if n.Status != notification.StatusPending {
+		t.Fatalf("expected status %q, got %q", notification.StatusPending, n.Status)
 	}
-
-	waitForStatus(t, repo, n.ID, notification.StatusSent)
-
-	got, err := repo.Get(context.Background(), n.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Attempts != 1 {
-		t.Fatalf("expected 1 attempt, got %d", got.Attempts)
+	if got := publisher.published(); len(got) != 1 || got[0] != n.ID {
+		t.Fatalf("expected publish of [%s], got %v", n.ID, got)
 	}
 }
 
-func TestCreateDispatchFailureRetriesThenMarksFailed(t *testing.T) {
-	const maxAttempts = 3
-	sender := &stubSender{err: errors.New("boom"), sent: make(chan *notification.Notification, maxAttempts)}
+func TestCreatePublishFailurePropagates(t *testing.T) {
 	repo := repository.NewMemoryRepository()
-	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(maxAttempts))
+	publisher := &stubPublisher{err: errors.New("broker unavailable")}
+	svc := NewNotificationService(repo, nil, WithPublisher(publisher))
 
-	n, err := svc.Create(context.Background(), notification.ChannelWebhook, "https://example.com/hook", "hi")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	n, err := svc.Create(context.Background(), notification.ChannelEmail, "user@example.com", "hi")
+	if err == nil {
+		t.Fatal("expected error, got nil")
 	}
 
-	waitForStatus(t, repo, n.ID, notification.StatusFailed)
-
-	if len(sender.sent) != maxAttempts {
-		t.Fatalf("expected %d delivery attempts, got %d", maxAttempts, len(sender.sent))
+	// The notification is still saved as pending even though nothing will
+	// ever pick it up - see the comment in Create about the dual-write gap.
+	got, getErr := repo.Get(context.Background(), n.ID)
+	if getErr != nil {
+		t.Fatalf("unexpected error on get: %v", getErr)
 	}
-
-	got, err := repo.Get(context.Background(), n.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Attempts != maxAttempts {
-		t.Fatalf("expected %d attempts recorded, got %d", maxAttempts, got.Attempts)
-	}
-	if got.LastError != "boom" {
-		t.Fatalf("expected last_error %q, got %q", "boom", got.LastError)
+	if got.Status != notification.StatusPending {
+		t.Fatalf("expected status %q, got %q", notification.StatusPending, got.Status)
 	}
 }
 
-func TestCreateDispatchSucceedsAfterTransientFailure(t *testing.T) {
-	sender := &flakySender{failures: 1}
-	repo := repository.NewMemoryRepository()
-	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
-
-	n, err := svc.Create(context.Background(), notification.ChannelPush, "device-token", "hi")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	waitForStatus(t, repo, n.ID, notification.StatusSent)
-
-	got, err := repo.Get(context.Background(), n.ID)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Attempts != 2 {
-		t.Fatalf("expected 2 attempts, got %d", got.Attempts)
-	}
-}
-
-func TestCreateWithoutSendersStaysPending(t *testing.T) {
+func TestCreateWithoutPublisherStaysPending(t *testing.T) {
 	repo := repository.NewMemoryRepository()
 	svc := NewNotificationService(repo, nil)
 
@@ -191,5 +152,154 @@ func TestCreateValidation(t *testing.T) {
 				t.Fatalf("expected %v, got %v", tc.wantErr, err)
 			}
 		})
+	}
+}
+
+func seed(t *testing.T, repo repository.Repository, n *notification.Notification) {
+	t.Helper()
+	if err := repo.Save(context.Background(), n); err != nil {
+		t.Fatalf("unexpected error seeding notification: %v", err)
+	}
+}
+
+func TestDispatchSendsAndMarksSent(t *testing.T) {
+	sender := &stubSender{sent: make(chan *notification.Notification, 1)}
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
+
+	n := &notification.Notification{ID: "abc123", Channel: notification.ChannelEmail, Status: notification.StatusPending}
+	seed(t, repo, n)
+
+	if err := svc.Dispatch(context.Background(), n.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case got := <-sender.sent:
+		if got.ID != n.ID {
+			t.Fatalf("expected sender to receive notification %s, got %s", n.ID, got.ID)
+		}
+	default:
+		t.Fatal("expected sender to have been called")
+	}
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != notification.StatusSent {
+		t.Fatalf("expected status %q, got %q", notification.StatusSent, got.Status)
+	}
+	if got.Attempts != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got.Attempts)
+	}
+}
+
+func TestDispatchFailureRetriesThenMarksFailed(t *testing.T) {
+	const maxAttempts = 3
+	sender := &stubSender{err: errors.New("boom"), sent: make(chan *notification.Notification, maxAttempts)}
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(maxAttempts))
+
+	n := &notification.Notification{ID: "abc123", Channel: notification.ChannelWebhook, Status: notification.StatusPending}
+	seed(t, repo, n)
+
+	if err := svc.Dispatch(context.Background(), n.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(sender.sent) != maxAttempts {
+		t.Fatalf("expected %d delivery attempts, got %d", maxAttempts, len(sender.sent))
+	}
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != notification.StatusFailed {
+		t.Fatalf("expected status %q, got %q", notification.StatusFailed, got.Status)
+	}
+	if got.Attempts != maxAttempts {
+		t.Fatalf("expected %d attempts recorded, got %d", maxAttempts, got.Attempts)
+	}
+	if got.LastError != "boom" {
+		t.Fatalf("expected last_error %q, got %q", "boom", got.LastError)
+	}
+}
+
+func TestDispatchSucceedsAfterTransientFailure(t *testing.T) {
+	sender := &flakySender{failures: 1}
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
+
+	n := &notification.Notification{ID: "abc123", Channel: notification.ChannelPush, Status: notification.StatusPending}
+	seed(t, repo, n)
+
+	if err := svc.Dispatch(context.Background(), n.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != notification.StatusSent {
+		t.Fatalf("expected status %q, got %q", notification.StatusSent, got.Status)
+	}
+	if got.Attempts != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got.Attempts)
+	}
+}
+
+func TestDispatchUnknownChannelMarksFailedImmediately(t *testing.T) {
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &provider.Registry{}, fastRetryPolicy(3))
+
+	n := &notification.Notification{ID: "abc123", Channel: notification.Channel("sms"), Status: notification.StatusPending}
+	seed(t, repo, n)
+
+	if err := svc.Dispatch(context.Background(), n.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), n.ID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got.Status != notification.StatusFailed {
+		t.Fatalf("expected status %q, got %q", notification.StatusFailed, got.Status)
+	}
+	if got.Attempts != 0 {
+		t.Fatalf("expected 0 attempts, got %d", got.Attempts)
+	}
+}
+
+// A redelivered job for a notification that a previous run already resolved
+// must not be sent again.
+func TestDispatchSkipsAlreadyResolvedNotification(t *testing.T) {
+	sender := &stubSender{sent: make(chan *notification.Notification, 1)}
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &stubRegistry{sender: sender}, fastRetryPolicy(3))
+
+	n := &notification.Notification{ID: "abc123", Channel: notification.ChannelEmail, Status: notification.StatusSent, Attempts: 1}
+	seed(t, repo, n)
+
+	if err := svc.Dispatch(context.Background(), n.ID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	select {
+	case <-sender.sent:
+		t.Fatal("expected sender not to be called for an already-resolved notification")
+	default:
+	}
+}
+
+func TestDispatchNotFoundReturnsError(t *testing.T) {
+	repo := repository.NewMemoryRepository()
+	svc := NewNotificationService(repo, &provider.Registry{})
+
+	if err := svc.Dispatch(context.Background(), "does-not-exist"); err == nil {
+		t.Fatal("expected error, got nil")
 	}
 }

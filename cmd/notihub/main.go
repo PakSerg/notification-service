@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/PakSerg/NotiHub/internal/config"
-	"github.com/PakSerg/NotiHub/internal/provider"
+	"github.com/PakSerg/NotiHub/internal/queue"
 	"github.com/PakSerg/NotiHub/internal/ratelimit"
 	"github.com/PakSerg/NotiHub/internal/repository"
 	"github.com/PakSerg/NotiHub/internal/service"
@@ -53,12 +53,17 @@ func run() error {
 		log.Printf("rate limiting enabled: %.1f req/s, burst %d", cfg.RateLimitRPS, cfg.RateLimitBurst)
 	}
 
-	retryPolicy := service.RetryPolicy{
-		MaxAttempts: cfg.RetryMaxAttempts,
-		BaseDelay:   cfg.RetryBaseDelay,
-		MaxDelay:    cfg.RetryMaxDelay,
-	}
-	notificationService := service.NewNotificationService(notificationRepo, provider.NewRegistry(), service.WithRetryPolicy(retryPolicy))
+	producer := queue.NewProducer(cfg.KafkaBrokers, cfg.KafkaTopic)
+	defer func() {
+		if err := producer.Close(); err != nil {
+			log.Printf("close kafka producer: %v", err)
+		}
+	}()
+
+	// The API only ever creates notifications and hands their delivery off to
+	// the queue, so it has no need for a SenderRegistry - that belongs to the
+	// worker, which is what actually calls Dispatch.
+	notificationService := service.NewNotificationService(notificationRepo, nil, service.WithPublisher(producer))
 	handler := transport.NewHandler(notificationService, limiter)
 
 	server := &http.Server{

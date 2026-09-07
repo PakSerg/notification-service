@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -32,18 +33,29 @@ type Config struct {
 	RetryBaseDelay time.Duration
 	// RetryMaxDelay caps the backoff between delivery attempts.
 	RetryMaxDelay time.Duration
+	// KafkaBrokers is the list of Kafka bootstrap addresses.
+	KafkaBrokers []string
+	// KafkaTopic is the topic delivery jobs are published to and consumed from.
+	KafkaTopic string
+	// KafkaConsumerGroup is the consumer group the worker joins; running
+	// multiple worker instances under the same group splits the topic's
+	// partitions between them instead of each seeing every message.
+	KafkaConsumerGroup string
 }
 
 // Default values are chosen to make `go run ./cmd/notihub` work with no setup.
 const (
-	defaultHTTPAddr         = ":8080"
-	defaultDatabaseURL      = "postgres://notihub:notihub@localhost:5432/notihub?sslmode=disable"
-	defaultShutdownTimeout  = 5 * time.Second
-	defaultRateLimitRPS     = 5.0
-	defaultRateLimitBurst   = 10
-	defaultRetryMaxAttempts = 3
-	defaultRetryBaseDelay   = 500 * time.Millisecond
-	defaultRetryMaxDelay    = 10 * time.Second
+	defaultHTTPAddr           = ":8080"
+	defaultDatabaseURL        = "postgres://notihub:notihub@localhost:5432/notihub?sslmode=disable"
+	defaultShutdownTimeout    = 5 * time.Second
+	defaultRateLimitRPS       = 5.0
+	defaultRateLimitBurst     = 10
+	defaultRetryMaxAttempts   = 3
+	defaultRetryBaseDelay     = 500 * time.Millisecond
+	defaultRetryMaxDelay      = 10 * time.Second
+	defaultKafkaBrokers       = "localhost:9092"
+	defaultKafkaTopic         = "notihub.deliveries"
+	defaultKafkaConsumerGroup = "notihub-worker"
 )
 
 // Load reads the configuration from the environment, falling back to defaults.
@@ -79,14 +91,17 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		HTTPAddr:         stringEnv("NOTIHUB_HTTP_ADDR", defaultHTTPAddr),
-		DatabaseURL:      stringEnv("NOTIHUB_DATABASE_URL", defaultDatabaseURL),
-		ShutdownTimeout:  shutdownTimeout,
-		RateLimitRPS:     rateLimitRPS,
-		RateLimitBurst:   rateLimitBurst,
-		RetryMaxAttempts: retryMaxAttempts,
-		RetryBaseDelay:   retryBaseDelay,
-		RetryMaxDelay:    retryMaxDelay,
+		HTTPAddr:           stringEnv("NOTIHUB_HTTP_ADDR", defaultHTTPAddr),
+		DatabaseURL:        stringEnv("NOTIHUB_DATABASE_URL", defaultDatabaseURL),
+		ShutdownTimeout:    shutdownTimeout,
+		RateLimitRPS:       rateLimitRPS,
+		RateLimitBurst:     rateLimitBurst,
+		RetryMaxAttempts:   retryMaxAttempts,
+		RetryBaseDelay:     retryBaseDelay,
+		RetryMaxDelay:      retryMaxDelay,
+		KafkaBrokers:       splitEnv("NOTIHUB_KAFKA_BROKERS", defaultKafkaBrokers),
+		KafkaTopic:         stringEnv("NOTIHUB_KAFKA_TOPIC", defaultKafkaTopic),
+		KafkaConsumerGroup: stringEnv("NOTIHUB_KAFKA_CONSUMER_GROUP", defaultKafkaConsumerGroup),
 	}, nil
 }
 
@@ -95,6 +110,12 @@ func stringEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// splitEnv reads a comma-separated list from key, falling back to fallback
+// (itself comma-separated) when unset.
+func splitEnv(key, fallback string) []string {
+	return strings.Split(stringEnv(key, fallback), ",")
 }
 
 func durationEnv(key string, fallback time.Duration) (time.Duration, error) {

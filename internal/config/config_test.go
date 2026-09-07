@@ -1,6 +1,7 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -26,6 +27,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.RateLimitBurst != defaultRateLimitBurst {
 		t.Fatalf("expected rate limit burst %v, got %v", defaultRateLimitBurst, cfg.RateLimitBurst)
 	}
+	if want := []string{defaultKafkaBrokers}; !reflect.DeepEqual(cfg.KafkaBrokers, want) {
+		t.Fatalf("expected kafka brokers %v, got %v", want, cfg.KafkaBrokers)
+	}
+	if cfg.KafkaTopic != defaultKafkaTopic {
+		t.Fatalf("expected kafka topic %q, got %q", defaultKafkaTopic, cfg.KafkaTopic)
+	}
+	if cfg.KafkaConsumerGroup != defaultKafkaConsumerGroup {
+		t.Fatalf("expected kafka consumer group %q, got %q", defaultKafkaConsumerGroup, cfg.KafkaConsumerGroup)
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -34,6 +44,9 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("NOTIHUB_SHUTDOWN_TIMEOUT", "30s")
 	t.Setenv("NOTIHUB_RATE_LIMIT_RPS", "20")
 	t.Setenv("NOTIHUB_RATE_LIMIT_BURST", "40")
+	t.Setenv("NOTIHUB_KAFKA_BROKERS", "kafka-1:9092,kafka-2:9092")
+	t.Setenv("NOTIHUB_KAFKA_TOPIC", "custom.deliveries")
+	t.Setenv("NOTIHUB_KAFKA_CONSUMER_GROUP", "custom-group")
 
 	cfg, err := Load()
 	if err != nil {
@@ -54,6 +67,15 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.RateLimitBurst != 40 {
 		t.Fatalf("expected rate limit burst %v, got %v", 40, cfg.RateLimitBurst)
+	}
+	if want := []string{"kafka-1:9092", "kafka-2:9092"}; !reflect.DeepEqual(cfg.KafkaBrokers, want) {
+		t.Fatalf("expected kafka brokers %v, got %v", want, cfg.KafkaBrokers)
+	}
+	if cfg.KafkaTopic != "custom.deliveries" {
+		t.Fatalf("expected kafka topic %q, got %q", "custom.deliveries", cfg.KafkaTopic)
+	}
+	if cfg.KafkaConsumerGroup != "custom-group" {
+		t.Fatalf("expected kafka consumer group %q, got %q", "custom-group", cfg.KafkaConsumerGroup)
 	}
 }
 

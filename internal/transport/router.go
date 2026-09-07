@@ -53,13 +53,27 @@ func (h *Handler) createNotification(w http.ResponseWriter, r *http.Request) {
 
 	n, err := h.service.Create(r.Context(), notification.Channel(req.Channel), req.Recipient, req.Message)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if isValidationError(err) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		// n was still saved (Create returns it alongside a publish error), so
+		// this is a queue outage, not a bad request.
+		http.Error(w, "failed to queue notification for delivery", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(n)
+}
+
+// isValidationError reports whether err is one of Create's rejections of bad
+// input, as opposed to an infrastructure failure (e.g. the queue is down).
+func isValidationError(err error) bool {
+	return errors.Is(err, service.ErrInvalidChannel) ||
+		errors.Is(err, service.ErrEmptyRecipient) ||
+		errors.Is(err, service.ErrEmptyMessage)
 }
 
 func (h *Handler) getNotification(w http.ResponseWriter, r *http.Request) {
